@@ -85,27 +85,14 @@ func DockerPassthrough(args []string, dryRun bool) int {
 	return execDocker(full)
 }
 
-// DockerShim is used by the installed `docker` shim: passthrough when a
-// machine is active, otherwise the local docker unchanged.
+// DockerShim is used by the installed `docker` shim: when a machine is
+// active it routes through the exact same pipeline as `bunk run` (limits,
+// GPU auto-detect, auto port-forward); otherwise local docker, unchanged.
 func DockerShim(args []string) int {
-	host, _, err := activeLink()
-	if err == nil {
-		cfg := loadCfg()
-		sub := ""
-		if len(args) > 0 {
-			sub = args[0]
-		}
-		if sub == "run" {
-			has, _, _ := scanRunArgs(args[1:])
-			args = injectDefaults(args, has, cfg, "")
-		}
-		full := append([]string{"--host", host}, args...)
-		if os.Getenv("BUNK_SHOW_CMD") == "1" {
-			fmt.Fprintf(os.Stderr, "bunk: %s\n", strings.Join(full, " "))
-		}
-		return execDocker(full)
+	if _, _, err := activeLink(); err != nil {
+		return execDocker(args)
 	}
-	return execDocker(args)
+	return DockerPassthrough(args, false)
 }
 
 func linkGPU(name string) string {

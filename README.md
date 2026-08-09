@@ -34,7 +34,9 @@ machines are talking.
   (`--gpus all`), CPU-only elsewhere, and `BUNK_GPU=off` disables it.
 - **Seamless ports.** `bunk run -p 5432:5432 postgres` → `localhost:5432`
   on *your* machine just works (auto-forwarded over the tunnel). For
-  already-running services: `bunk forward <local>[:<remote>]`.
+  already-running services: `bunk forward <local>[:<remote>]`. Set
+  `BUNK_NO_AUTO_FORWARD=1` to skip auto-forwarding and manage ports
+  manually.
 - **Interop.** Every linked machine gets a docker context (`bunk-<name>`)
   and a local proxy socket, so Docker Desktop "connect", Portainer,
   Lazydocker, devcontainers and IDE extensions work unchanged.
@@ -84,6 +86,7 @@ docker command before running (`BUNK_SHOW_CMD=1` prints it while running).
 ```
 bunk pair [code] [--name NAME]   one-time linking (host: no code = create one)
 bunk use <machine> [--unset]     point docker at that machine (or go local)
+bunk unuse                     alias for 'bunk use --unset'
 bunk machines                    list linked machines + status
 bunk forward <local>[:<remote>]  expose a remote service port on localhost
 bunk unforward <port>            close a forward

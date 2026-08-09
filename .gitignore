@@ -1,0 +1,15 @@
+# build artifacts
+/bunk
+/bunk-hub
+*.exe
+
+# local state (never commit keys/tokens)
+.bunk/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# editor cruft
+.DS_Store
+*.swp

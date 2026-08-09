@@ -1,0 +1,34 @@
+# bunk-hub — blind E2E-encrypted relay server
+#
+# Install:
+#   sudo cp bunk-hub /usr/local/bin/
+#   sudo mkdir -p /etc/bunk-hub
+#   sudo cp systemd/bunk-hub.service /etc/systemd/system/
+#   # set the shared secret:
+#   sudo systemctl edit bunk-hub   # add: Environment=BUNK_HUB_TOKEN=<long-random-string>
+#   sudo systemctl daemon-reload && sudo systemctl enable --now bunk-hub
+#
+# For wss:// (recommended over the internet), put a TLS proxy (Caddy or
+# certbot + nginx) in front of :8080 and point clients at
+# wss://hub.example.com/ws.
+
+[Unit]
+Description=bunk-hub relay server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bunk-hub -addr :8080 -db /etc/bunk-hub/bunk-hub.db
+Restart=on-failure
+RestartSec=3
+# Set this via systemctl edit bunk-hub (Environment=BUNK_HUB_TOKEN=...)
+Environment=BUNK_HUB_TOKEN=
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/bunk-hub
+
+[Install]
+WantedBy=multi-user.target

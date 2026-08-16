@@ -243,6 +243,7 @@ func (d *Daemon) Run() error {
 	go d.controlLoop()
 
 	d.restoreListeners()
+	go d.watchAutoForwards()
 
 	if d.Cfg.IdleGate.Enabled {
 		go d.runIdleGate()

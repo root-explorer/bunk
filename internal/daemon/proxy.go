@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"time"
 
 	"bunk/internal/caps"
@@ -154,8 +157,9 @@ func (d *Daemon) resolvePeerID(name string) (string, bool) {
 // --- tcp forward listener -------------------------------------------------
 
 // EnsureForward opens 127.0.0.1:local -> remote 127.0.0.1:remote through
-// the relay to peer.
-func (d *Daemon) EnsureForward(peerNameOrID string, local, remote int) error {
+// the relay to peer. Auto forwards are closed by watchAutoForwards once no
+// running container on the peer publishes the remote port.
+func (d *Daemon) EnsureForward(peerNameOrID string, local, remote int, auto bool) error {
 	if local <= 0 || local > 65535 || remote <= 0 || remote > 65535 {
 		return errors.New("ports must be 1-65535")
 	}
@@ -176,7 +180,7 @@ func (d *Daemon) EnsureForward(peerNameOrID string, local, remote int) error {
 	}
 	d.mu.Lock()
 	d.fwdLns[local] = ln
-	d.st.Forwards = append(d.st.Forwards, &proto.ForwardInfo{Local: local, Remote: remote, Machine: peer.Name})
+	d.st.Forwards = append(d.st.Forwards, &proto.ForwardInfo{Local: local, Remote: remote, Machine: peer.Name, Auto: auto})
 	d.mu.Unlock()
 	d.saveState()
 
@@ -302,4 +306,95 @@ func (d *Daemon) findPeerID(nameOrID string) (string, error) {
 		}
 	}
 	return "", errors.New("unknown machine (run 'bunk machines')")
+}
+
+// --- auto-forward lifecycle (close on container stop) ---------------------
+
+// watchAutoForwards periodically checks each auto forward: if no running
+// container on the target machine publishes the remote port anymore, the
+// forward is closed. Runs for the lifetime of the daemon.
+func (d *Daemon) watchAutoForwards() {
+	t := time.NewTicker(4 * time.Second)
+	defer t.Stop()
+	for range t.C {
+		d.mu.Lock()
+		var autos []proto.ForwardInfo
+		for _, f := range d.st.Forwards {
+			if f.Auto {
+				autos = append(autos, *f)
+			}
+		}
+		d.mu.Unlock()
+		if len(autos) == 0 {
+			continue
+		}
+		byMachine := map[string][]proto.ForwardInfo{}
+		for _, f := range autos {
+			byMachine[f.Machine] = append(byMachine[f.Machine], f)
+		}
+		for machine, fwds := range byMachine {
+			live, err := d.containerPublicPorts(machine)
+			if err != nil {
+				continue // link not ready: retry next tick
+			}
+			for _, f := range fwds {
+				if !live[f.Remote] {
+					log.Printf("auto-forward: closing %d -> %s:%d (container stopped)", f.Local, machine, f.Remote)
+					d.StopForward(f.Local)
+				}
+			}
+		}
+	}
+}
+
+// containerPublicPorts returns the set of host ports published by running
+// containers on the peer's docker daemon, queried through the link proxy.
+func (d *Daemon) containerPublicPorts(machine string) (map[int]bool, error) {
+	d.mu.Lock()
+	lnk, ok := d.st.Links[machine]
+	d.mu.Unlock()
+	if !ok || lnk.Port == 0 {
+		return nil, errors.New("no link")
+	}
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", lnk.Port), 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := fmt.Fprintf(conn, "GET /containers/json HTTP/1.1\r\nHost: docker\r\n\r\n"); err != nil {
+		return nil, err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return parsePublicPorts(data)
+}
+
+// parsePublicPorts extracts the set of published host ports from a docker
+// /containers/json response body.
+func parsePublicPorts(data []byte) (map[int]bool, error) {
+	var list []struct {
+		Ports []struct {
+			PublicPort int `json:"PublicPort"`
+		} `json:"Ports"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, err
+	}
+	out := map[int]bool{}
+	for _, c := range list {
+		for _, p := range c.Ports {
+			if p.PublicPort > 0 {
+				out[p.PublicPort] = true
+			}
+		}
+	}
+	return out, nil
 }

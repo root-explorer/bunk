@@ -230,7 +230,7 @@ func startAutoForwards(publishes []string, machine string) []int {
 		if !ok {
 			continue
 		}
-		resp, err := ctl(proto.CtlReq{Cmd: proto.CtlForward, Name: machine, Local: hostPort, Remote: hostPort})
+		resp, err := ctl(proto.CtlReq{Cmd: proto.CtlForward, Name: machine, Local: hostPort, Remote: hostPort, Auto: true})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "bunk: auto-forward %d: %v\n", hostPort, err)
 			continue

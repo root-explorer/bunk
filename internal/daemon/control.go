@@ -184,7 +184,7 @@ func (d *Daemon) ctlForward(req proto.CtlReq) proto.CtlResp {
 	if remote == 0 {
 		remote = req.Local
 	}
-	if err := d.EnsureForward(peer, req.Local, remote); err != nil {
+	if err := d.EnsureForward(peer, req.Local, remote, req.Auto); err != nil {
 		return proto.CtlResp{OK: false, Error: err.Error()}
 	}
 	return proto.CtlResp{OK: true, Port: req.Local}

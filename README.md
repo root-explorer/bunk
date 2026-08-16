@@ -33,7 +33,8 @@ machines are talking.
   in `~/.bunk/config.yaml`). GPU passthrough is automatic on Nvidia hosts
   (`--gpus all`), CPU-only elsewhere, and `BUNK_GPU=off` disables it.
 - **Seamless ports.** `bunk run -p 5432:5432 postgres` → `localhost:5432`
-  on *your* machine just works (auto-forwarded over the tunnel). For
+  on *your* machine just works (auto-forwarded over the tunnel), and the
+  forward closes automatically when the container stops. For
   already-running services: `bunk forward <local>[:<remote>]`. Set
   `BUNK_NO_AUTO_FORWARD=1` to skip auto-forwarding and manage ports
   manually.

@@ -94,6 +94,7 @@ type CtlReq struct {
 	Code   string `json:"code,omitempty"`   // pairing code
 	Local  int    `json:"local,omitempty"`  // local port
 	Remote int    `json:"remote,omitempty"` // remote port
+	Auto   bool   `json:"auto,omitempty"`   // auto-forward tied to container lifetime
 }
 
 // CtlResp is the daemon's answer.
@@ -115,4 +116,5 @@ type ForwardInfo struct {
 	Local   int    `json:"local"`
 	Remote  int    `json:"remote"`
 	Machine string `json:"machine"`
+	Auto    bool   `json:"auto,omitempty"` // closed when the container stops
 }

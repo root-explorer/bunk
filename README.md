@@ -127,6 +127,11 @@ idle_gate:
   threshold_ms: 30000
 ```
 
+The limits above are the *caps for what you may ask of any host*; injected
+defaults are then **clamped to each host's real capacity** (reported at link
+time), so a 2-core/1GB box only ever gets asked for 2 CPUs / 1GB, and a
+32-core rig gets the full defaults. User-supplied flags always win.
+
 ## Idle gate (optional "respect the host" add-on)
 
 `bunk install-idle-gate` enables a small loop on the *shared* machine:

@@ -63,7 +63,8 @@ func ramGB() int {
 			f := strings.Fields(line)
 			if len(f) >= 2 {
 				if kb, err := strconv.ParseInt(f[1], 10, 64); err == nil {
-					return int(kb / 1024 / 1024)
+					// Round up so sub-1GB hosts report 1.
+					return int((kb + 1024*1024 - 1) / (1024 * 1024))
 				}
 			}
 			return 0

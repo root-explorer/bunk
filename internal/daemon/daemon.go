@@ -68,8 +68,10 @@ func DefaultConfig() Config {
 
 // LinkInfo is a live docker proxy listener for a peer machine.
 type LinkInfo struct {
-	Port int    `json:"port"`
-	GPU  string `json:"gpu"`
+	Port  int    `json:"port"`
+	GPU   string `json:"gpu"`
+	Cores int    `json:"cores,omitempty"`
+	RAMGB int    `json:"ram_gb,omitempty"`
 }
 
 // State is ~/.bunk/state.json, written by the daemon, read by the CLI.

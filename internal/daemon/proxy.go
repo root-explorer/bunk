@@ -27,14 +27,17 @@ func (d *Daemon) EnsureLink(nameOrID string) (int, string, error) {
 	d.mu.Lock()
 	existing, ok := d.st.Links[peer.Name]
 	d.mu.Unlock()
-	if ok && existing.Port > 0 {
+	if ok && existing.Port > 0 && existing.Cores > 0 {
 		return existing.Port, existing.GPU, nil
 	}
 
-	// Probe the peer's GPU through the relay.
+	// Probe the peer's capabilities through the relay (GPU + capacity).
 	gpu := "none"
+	var cores, ramGB int
 	if c, err := d.waitCaps(peer.ID); err == nil {
 		gpu = c.GPU
+		cores = c.Cores
+		ramGB = c.RAMGB
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -44,7 +47,18 @@ func (d *Daemon) EnsureLink(nameOrID string) (int, string, error) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	d.mu.Lock()
 	d.linkLns[peer.Name] = ln
-	d.st.Links[peer.Name] = &LinkInfo{Port: port, GPU: gpu}
+	if existing != nil && existing.Port > 0 {
+		// Link listener exists but caps were missing (old state): keep
+		// the port, refresh the caps.
+		existing.GPU = gpu
+		existing.Cores = cores
+		existing.RAMGB = ramGB
+		d.mu.Unlock()
+		d.saveState()
+		ln.Close()
+		return existing.Port, gpu, nil
+	}
+	d.st.Links[peer.Name] = &LinkInfo{Port: port, GPU: gpu, Cores: cores, RAMGB: ramGB}
 	d.mu.Unlock()
 	d.saveState()
 
@@ -89,8 +103,14 @@ func (d *Daemon) restoreListeners() {
 			continue
 		}
 		d.linkLns[name] = ln
+		li := d.st.Links[name]
 		d.mu.Unlock()
 		go d.acceptForName(ln, name, proto.ServiceDocker, "")
+		// Refresh cached caps (GPU, cores, RAM) once the hub link is up;
+		// old state files predate capacity caching.
+		if li != nil && (li.Cores == 0 || li.RAMGB == 0) {
+			go d.refreshLinkCaps(name, li)
+		}
 	}
 
 	for _, f := range forwards {
@@ -397,4 +417,30 @@ func parsePublicPorts(data []byte) (map[int]bool, error) {
 		}
 	}
 	return out, nil
+}
+
+// refreshLinkCaps re-probes a linked machine's capabilities and updates the
+// cached LinkInfo in place (used at startup for links created before
+// capacity caching existed). Retries until the hub link is up.
+func (d *Daemon) refreshLinkCaps(name string, li *LinkInfo) {
+	for attempt := 0; attempt < 18; attempt++ {
+		peer, err := d.resolvePeer(name)
+		if err == nil {
+			err = d.requireOnline(peer)
+			if err == nil {
+				if c, cerr := d.waitCaps(peer.ID); cerr == nil {
+					d.mu.Lock()
+					li.GPU = c.GPU
+					li.Cores = c.Cores
+					li.RAMGB = c.RAMGB
+					d.mu.Unlock()
+					d.saveState()
+					log.Printf("link %s caps refreshed: gpu=%s cores=%d ram=%dGB", name, c.GPU, c.Cores, c.RAMGB)
+					return
+				}
+			}
+		}
+		time.Sleep(10 * time.Second)
+	}
+	log.Printf("link %s: caps refresh gave up (peer offline?)", name)
 }

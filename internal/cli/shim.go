@@ -63,7 +63,8 @@ func DockerPassthrough(args []string, dryRun bool) int {
 	if sub == "run" {
 		var has map[string]bool
 		has, publishes, detached = scanRunArgs(args[1:])
-		args = injectDefaults(args, has, cfg, linkGPU(active))
+		cores, ramGB := linkCaps(active)
+		args = injectDefaults(args, has, cfg, linkGPU(active), cores, ramGB)
 	}
 
 	full := append([]string{"--host", host}, args...)
@@ -106,14 +107,43 @@ func linkGPU(name string) string {
 	return "none"
 }
 
-// injectDefaults adds limits + GPU flags only when the user didn't.
-func injectDefaults(args []string, has map[string]bool, cfg daemon.Config, gpu string) []string {
-	var extra []string
-	if !has["--cpus"] && !has["--cpu-shares"] && cfg.Limits.CPUs > 0 {
-		extra = append(extra, "--cpus", strconv.Itoa(cfg.Limits.CPUs))
+// linkCaps returns the linked machine's reported capacity (cores, RAM GB).
+func linkCaps(name string) (int, int) {
+	st, err := readState()
+	if err != nil {
+		return 0, 0
 	}
-	if !has["--memory"] && !has["-m"] && cfg.Limits.MemoryGB > 0 {
-		extra = append(extra, "--memory", fmt.Sprintf("%dg", cfg.Limits.MemoryGB))
+	if ln, ok := st.Links[name]; ok {
+		return ln.Cores, ln.RAMGB
+	}
+	return 0, 0
+}
+
+// injectDefaults adds limits + GPU flags only when the user didn't.
+// The injected limits are clamped to the host's reported capacity so the
+// host is never asked for more than it has.
+func injectDefaults(args []string, has map[string]bool, cfg daemon.Config, gpu string, cores, ramGB int) []string {
+	cpus := cfg.Limits.CPUs
+	if cores > 0 && cpus > cores {
+		cpus = cores
+	}
+	memGB := cfg.Limits.MemoryGB
+	// Leave the host at least 1 GB of headroom, floored at 1 GB.
+	if ramGB > 0 {
+		headroom := ramGB - 1
+		if headroom < 1 {
+			headroom = 1
+		}
+		if memGB > headroom {
+			memGB = headroom
+		}
+	}
+	var extra []string
+	if !has["--cpus"] && !has["--cpu-shares"] && cpus > 0 {
+		extra = append(extra, "--cpus", strconv.Itoa(cpus))
+	}
+	if !has["--memory"] && !has["-m"] && memGB > 0 {
+		extra = append(extra, "--memory", fmt.Sprintf("%dg", memGB))
 	}
 	if !has["--pids-limit"] && cfg.Limits.Pids > 0 {
 		extra = append(extra, "--pids-limit", strconv.Itoa(cfg.Limits.Pids))

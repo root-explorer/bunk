@@ -48,8 +48,10 @@ type keyPairJSON struct {
 }
 
 type linkJSON struct {
-	Port int    `json:"port"`
-	GPU  string `json:"gpu"`
+	Port  int    `json:"port"`
+	GPU   string `json:"gpu"`
+	Cores int    `json:"cores"`
+	RAMGB int    `json:"ram_gb"`
 }
 
 func readState() (*daemonState, error) {

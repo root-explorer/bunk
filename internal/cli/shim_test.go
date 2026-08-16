@@ -18,7 +18,7 @@ func cfg() daemon.Config {
 func TestInjectDefaultsAddsLimits(t *testing.T) {
 	args := []string{"run", "postgres:16"}
 	has, _, _ := scanRunArgs(args[1:])
-	got := injectDefaults(args, has, cfg(), "none")
+	got := injectDefaults(args, has, cfg(), "none", 0, 0)
 	want := "docker run --cpus 6 --memory 12g --pids-limit 256 postgres:16"
 	if strings.Join(got, " ") != strings.TrimPrefix(want, "docker ") {
 		t.Fatalf("got %q want %q", strings.Join(got, " "), want)
@@ -28,7 +28,7 @@ func TestInjectDefaultsAddsLimits(t *testing.T) {
 func TestInjectDefaultsRespectsUserFlags(t *testing.T) {
 	args := []string{"run", "--cpus", "2", "--memory", "1g", "-d", "redis:7"}
 	has, _, _ := scanRunArgs(args[1:])
-	got := injectDefaults(args, has, cfg(), "none")
+	got := injectDefaults(args, has, cfg(), "none", 0, 0)
 	for _, f := range []string{"--cpus", "2", "--memory", "1g"} {
 		if !strings.Contains(strings.Join(got, " "), f) {
 			t.Fatalf("missing user flag %s in %v", f, got)
@@ -45,17 +45,17 @@ func TestInjectDefaultsRespectsUserFlags(t *testing.T) {
 func TestInjectGPUOnlyForNvidia(t *testing.T) {
 	has := map[string]bool{}
 	args := []string{"run", "nvidia/cuda:12.0"}
-	got := injectDefaults(args, has, cfg(), "nvidia")
+	got := injectDefaults(args, has, cfg(), "nvidia", 0, 0)
 	if !strings.Contains(strings.Join(got, " "), "--gpus all") {
 		t.Fatalf("expected --gpus all on nvidia host: %v", got)
 	}
-	got = injectDefaults(args, has, cfg(), "none")
+	got = injectDefaults(args, has, cfg(), "none", 0, 0)
 	if strings.Contains(strings.Join(got, " "), "--gpus") {
 		t.Fatalf("no --gpus expected on non-nvidia host: %v", got)
 	}
 	off := cfg()
 	off.GPU = "off"
-	got = injectDefaults(args, has, off, "nvidia")
+	got = injectDefaults(args, has, off, "nvidia", 0, 0)
 	if strings.Contains(strings.Join(got, " "), "--gpus") {
 		t.Fatalf("gpu off must disable injection: %v", got)
 	}
@@ -123,5 +123,32 @@ func TestCombinedShortFlags(t *testing.T) {
 	}
 	if len(pubs) != 1 || pubs[0] != "5432:5432" {
 		t.Fatalf("attached -p value not parsed: %v", pubs)
+	}
+}
+
+func TestInjectDefaultsClampsToHostCapacity(t *testing.T) {
+	// Small host (2 cores, 2 GB): defaults clamp down.
+	args := []string{"run", "postgres:16"}
+	has, _, _ := scanRunArgs(args[1:])
+	got := injectDefaults(args, has, cfg(), "none", 2, 2)
+	s := strings.Join(got, " ")
+	for _, want := range []string{"--cpus 2", "--memory 1g", "--pids-limit 256"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing clamped %s in %q", want, s)
+		}
+	}
+	// Big host (16 cores, 32 GB): defaults unchanged.
+	got = injectDefaults(args, has, cfg(), "none", 16, 32)
+	s = strings.Join(got, " ")
+	for _, want := range []string{"--cpus 6", "--memory 12g"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("defaults should survive on big hosts: %q", s)
+		}
+	}
+	// Unknown caps (0,0): defaults unchanged (old state).
+	got = injectDefaults(args, has, cfg(), "none", 0, 0)
+	s = strings.Join(got, " ")
+	if !strings.Contains(s, "--cpus 6") || !strings.Contains(s, "--memory 12g") {
+		t.Fatalf("defaults should survive with unknown caps: %q", s)
 	}
 }

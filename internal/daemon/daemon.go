@@ -31,6 +31,10 @@ const (
 	DefaultCPUs     = 6
 	DefaultMemoryGB = 12
 	DefaultPids     = 256
+
+	// welcomeTimeout bounds how long we wait for the hub to ack our hello
+	// before failing the connection and retrying.
+	welcomeTimeout = 15 * time.Second
 )
 
 // Limits are injected into docker run unless the user set them.
@@ -101,11 +105,15 @@ type Daemon struct {
 	Home string
 	Cfg  Config
 
-	mu     sync.Mutex
-	st     State
-	peers  map[string]proto.MachineInfo
-	online bool
-	hubURL string
+	mu       sync.Mutex
+	st       State
+	peers    map[string]proto.MachineInfo
+	online   bool
+	welcomed bool
+	hubURL   string
+
+	writerMu   sync.Mutex
+	writerStop chan struct{}
 
 	conn *websocket.Conn
 	send chan proto.Msg
@@ -283,25 +291,30 @@ func (d *Daemon) connectLoop() {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		err := d.connectOnce()
+		welcomed, err := d.connectOnce()
 		if err != nil {
 			log.Printf("hub connection: %v", err)
+		}
+		if welcomed {
+			backoff = time.Second // we were connected: retry fast after drops
+		} else if backoff < 30*time.Second {
+			backoff *= 2
 		}
 		select {
 		case <-d.stop:
 			return
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
 	}
 }
 
-func (d *Daemon) connectOnce() error {
+// connectOnce dials the hub, registers this machine, and blocks serving the
+// connection. Returns (welcomed, err): welcomed is true when the hub
+// acknowledged our hello (so the caller can reset its backoff).
+func (d *Daemon) connectOnce() (bool, error) {
 	u, err := url.Parse(d.hubURL)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if u.Scheme == "http" {
 		u.Scheme = "ws"
@@ -313,7 +326,7 @@ func (d *Daemon) connectOnce() error {
 	}
 	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	d.mu.Lock()
 	d.conn = conn
@@ -322,27 +335,44 @@ func (d *Daemon) connectOnce() error {
 
 	d.mu.Lock()
 	d.online = false
+	d.welcomed = false
 	d.mu.Unlock()
 
-	go d.hubWriter(conn)
+	// Stop the previous connection's writer before starting this one: the
+	// send channel is shared across connections, and a zombie writer would
+	// steal messages (the hello!) and write them into a dead socket.
+	d.writerMu.Lock()
+	if d.writerStop != nil {
+		close(d.writerStop)
+	}
+	d.writerStop = make(chan struct{})
+	stop := d.writerStop
+	d.writerMu.Unlock()
+	go d.hubWriter(conn, stop)
 
-	// hello: register this machine.
-	d.sendMsg(proto.Msg{
+	// hello: register this machine. Written directly on this connection so
+	// it can never be stolen by a previous writer.
+	if err := conn.WriteJSON(proto.Msg{
 		Type:      proto.THello,
 		MachineID: d.st.MachineID,
 		Name:      d.st.Name,
 		PubKey:    d.st.Key.PubB64,
 		Token:     d.Cfg.Token,
-	})
+	}); err != nil {
+		return false, err
+	}
 
+	// Wait up to welcomeTimeout for the hub's welcome; if the hub stalls
+	// (e.g. wedged store), fail the connection so the loop retries instead
+	// of blocking forever.
+	if err := conn.SetReadDeadline(time.Now().Add(welcomeTimeout)); err != nil {
+		return false, err
+	}
+	err = d.hubReader(conn)
 	d.mu.Lock()
-	d.online = true
-	backoffReset := true
+	welcomed := d.welcomed
 	d.mu.Unlock()
-	_ = backoffReset
-
-	// A control command may have queued while offline; nothing special.
-	return d.hubReader(conn)
+	return welcomed, err
 }
 
 func (d *Daemon) sendMsg(m proto.Msg) {
@@ -354,12 +384,14 @@ func (d *Daemon) sendMsg(m proto.Msg) {
 
 // hubWriter serializes outbound messages and keeps the connection
 // alive with periodic pings (read deadlines on both ends rely on them).
-func (d *Daemon) hubWriter(conn *websocket.Conn) {
+func (d *Daemon) hubWriter(conn *websocket.Conn, stop <-chan struct{}) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-d.stop:
+			return
+		case <-stop:
 			return
 		case m, ok := <-d.send:
 			if !ok {
@@ -381,7 +413,16 @@ func (d *Daemon) hubReader(conn *websocket.Conn) error {
 	conn.SetReadLimit(64 << 20)
 	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(90 * time.Second)) })
 	for {
-		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		d.mu.Lock()
+		welcomed := d.welcomed
+		d.mu.Unlock()
+		if welcomed {
+			conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		} else {
+			// Still waiting for the hub's welcome: keep the short
+			// deadline so a stalled hub fails fast and we retry.
+			conn.SetReadDeadline(time.Now().Add(welcomeTimeout))
+		}
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return err
@@ -405,6 +446,15 @@ func (d *Daemon) handleHubMsg(m proto.Msg) {
 		d.mu.Unlock()
 	case proto.TWelcome:
 		log.Printf("connected to hub as %q (%s)", m.Name, m.MachineID)
+		d.mu.Lock()
+		d.online = true
+		d.welcomed = true
+		d.mu.Unlock()
+		if d.conn != nil {
+			// Welcome received: lift the welcome deadline; keepalive
+			// deadlines take over from here.
+			d.conn.SetReadDeadline(time.Time{})
+		}
 	case proto.TPaired:
 		log.Printf("paired with %s", m.Peer.ID)
 	case proto.TCodeCreated:

@@ -62,6 +62,20 @@ echo "   forwarded response: $BODY"
 echo "== limits injected (docker inspect shows cpus/memory) =="
 BUNK_HOME="$WORK/b" "$WORK/bunk" inspect --format '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' bunk-smoke-srv
 
+echo "== hub restart: both agents must reconnect (writer-race regression) =="
+kill "${PIDS[0]}" 2>/dev/null || true
+sleep 1
+BUNK_HUB_TOKEN="$TOKEN" "$WORK/bunk-hub" -addr "$HUB_ADDR" -db "$WORK/hub.db" >>"$WORK/hub.log" 2>&1 &
+PIDS[0]=$!
+sleep 8
+ONLINE=$(BUNK_HOME="$WORK/b" "$WORK/bunk" machines | grep -c online || true)
+if [ "$ONLINE" -lt 2 ]; then
+  echo "FAIL: not all machines reconnected after hub restart:"
+  BUNK_HOME="$WORK/b" "$WORK/bunk" machines
+  exit 1
+fi
+echo "   reconnected: $ONLINE machines online"
+
 echo "== revoke cuts the link =="
 BUNK_HOME="$WORK/b" "$WORK/bunk" revoke host-a
 sleep 0.3

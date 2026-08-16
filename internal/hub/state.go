@@ -16,7 +16,7 @@ type Store struct {
 
 // Open opens (creating if needed) the hub database at path.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -55,14 +55,14 @@ func (s *Store) UpsertMachine(id, name, pubkey string) error {
 	return err
 }
 
-// GetMachine returns a machine's pubkey, or ("", nil) if unknown.
-func (s *Store) GetMachine(id string) (string, error) {
-	var pub string
-	err := s.db.QueryRow(`SELECT pubkey FROM machines WHERE id=?`, id).Scan(&pub)
+// GetMachine returns a machine's name and pubkey, or ("", "", nil) if unknown.
+func (s *Store) GetMachine(id string) (string, string, error) {
+	var name, pub string
+	err := s.db.QueryRow(`SELECT name, pubkey FROM machines WHERE id=?`, id).Scan(&name, &pub)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		return "", "", nil
 	}
-	return pub, err
+	return name, pub, err
 }
 
 // Machines lists all registered machine ids.

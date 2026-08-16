@@ -92,6 +92,7 @@ func (h *Hub) readLoop(c *client) {
 		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
+			log.Printf("readLoop %p: read: %v", c, err)
 			return
 		}
 		var m proto.Msg
@@ -168,6 +169,7 @@ func (h *Hub) onHello(c *client, m proto.Msg) {
 		return
 	}
 	if err := h.store.UpsertMachine(m.MachineID, m.Name, m.PubKey); err != nil {
+		log.Printf("hello %q: store error: %v", m.Name, err)
 		h.replyError(c, "store: "+err.Error())
 		return
 	}
@@ -179,6 +181,7 @@ func (h *Hub) onHello(c *client, m proto.Msg) {
 	c.name = m.Name
 	h.clients[c.id] = c
 	h.mu.Unlock()
+	log.Printf("hello from %q (%s)", m.Name, m.MachineID)
 	h.reply(c, proto.Msg{Type: proto.TWelcome, MachineID: m.MachineID, Name: m.Name})
 	h.broadcastUpdate()
 }
@@ -307,13 +310,13 @@ func (h *Hub) machineList() []proto.MachineInfo {
 	}
 	var out []proto.MachineInfo
 	for _, id := range ids {
-		pub, err := h.store.GetMachine(id)
+		storedName, pub, err := h.store.GetMachine(id)
 		if err != nil {
 			continue
 		}
 		c := h.clients[id]
-		name := ""
-		if c != nil {
+		name := storedName
+		if c != nil && c.name != "" {
 			name = c.name
 		}
 		out = append(out, proto.MachineInfo{

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -56,6 +57,98 @@ func (d *Daemon) acceptLink(ln net.Listener, peerID string) {
 		}
 		go d.pipeLocal(conn, peerID, proto.ServiceDocker, "")
 	}
+}
+
+// restoreListeners recreates link and forward listeners that were
+// persisted in state.json, so docker proxies survive daemon restarts
+// (a stale port with no listener = "Cannot connect" for the CLI).
+func (d *Daemon) restoreListeners() {
+	d.mu.Lock()
+	links := map[string]int{}
+	for name, li := range d.st.Links {
+		if li != nil && li.Port > 0 {
+			links[name] = li.Port
+		}
+	}
+	forwards := append([]*proto.ForwardInfo{}, d.st.Forwards...)
+	d.mu.Unlock()
+
+	for name, port := range links {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			log.Printf("restore link %s: %v", name, err)
+			continue
+		}
+		d.mu.Lock()
+		if _, exists := d.linkLns[name]; exists {
+			d.mu.Unlock()
+			ln.Close()
+			continue
+		}
+		d.linkLns[name] = ln
+		d.mu.Unlock()
+		go d.acceptForName(ln, name, proto.ServiceDocker, "")
+	}
+
+	for _, f := range forwards {
+		if f == nil || f.Local <= 0 {
+			continue
+		}
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", f.Local))
+		if err != nil {
+			log.Printf("restore forward %d: %v", f.Local, err)
+			continue
+		}
+		d.mu.Lock()
+		if _, exists := d.fwdLns[f.Local]; exists {
+			d.mu.Unlock()
+			ln.Close()
+			continue
+		}
+		d.fwdLns[f.Local] = ln
+		d.mu.Unlock()
+		go d.acceptForName(ln, f.Machine, proto.ServiceTCP, fmt.Sprintf("127.0.0.1:%d", f.Remote))
+	}
+}
+
+// acceptForName accepts on a restored listener and resolves the peer id
+// by name at accept time (peers are known only after hub connect).
+func (d *Daemon) acceptForName(ln net.Listener, name, service, dial string) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		pid, ok := d.resolvePeerID(name)
+		if !ok {
+			for i := 0; i < 20; i++ { // wait up to ~10s for hub connect
+				time.Sleep(500 * time.Millisecond)
+				if pid, ok = d.resolvePeerID(name); ok {
+					break
+				}
+			}
+		}
+		if !ok {
+			conn.Close()
+			continue
+		}
+		go d.pipeLocal(conn, pid, service, dial)
+	}
+}
+
+// resolvePeerID finds a machine id by its display name.
+func (d *Daemon) resolvePeerID(name string) (string, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if p, ok := d.peers[name]; ok {
+		return p.ID, true
+	}
+	for _, p := range d.peers {
+		if p.Name == name {
+			return p.ID, true
+		}
+	}
+	return "", false
 }
 
 // --- tcp forward listener -------------------------------------------------
@@ -136,7 +229,7 @@ func (d *Daemon) pipeLocal(conn net.Conn, peerID, service, dial string) {
 		conn.Write(c.caps)
 		c.caps = nil
 	}
-	go d.pumpConnToPeer(c.id)
+	go d.pumpConnToPeer(c.id, false)
 	// Wait until the channel closes, then close the local conn.
 	go func() {
 		<-c.done

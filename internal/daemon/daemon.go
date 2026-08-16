@@ -194,6 +194,14 @@ func (d *Daemon) loadState() error {
 			return err
 		}
 		d.st.Key = kp
+	} else {
+		// Public/Private are json:"-", so they are nil after unmarshal.
+		// Re-derive them or the first Seal/Open will panic.
+		kp, err := e2e.LoadKey(d.st.Key.PubB64, d.st.Key.PrivB64)
+		if err != nil {
+			return fmt.Errorf("state key: %w", err)
+		}
+		d.st.Key = kp
 	}
 	if d.st.MachineID == "" {
 		d.st.MachineID = newID()
@@ -233,6 +241,8 @@ func (d *Daemon) Run() error {
 	d.mu.Unlock()
 	d.saveState()
 	go d.controlLoop()
+
+	d.restoreListeners()
 
 	if d.Cfg.IdleGate.Enabled {
 		go d.runIdleGate()

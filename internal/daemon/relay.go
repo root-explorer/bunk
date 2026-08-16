@@ -171,7 +171,7 @@ func (d *Daemon) handleRelay(m proto.Msg) {
 		if len(payload) > 0 {
 			conn.Write(payload)
 		}
-		go d.pumpConnToPeer(m.Channel)
+		go d.pumpConnToPeer(m.Channel, true)
 
 	case proto.ServiceDocker:
 		if !d.Cfg.ServeDocker {
@@ -189,7 +189,7 @@ func (d *Daemon) handleRelay(m proto.Msg) {
 		if len(payload) > 0 {
 			conn.Write(payload)
 		}
-		go d.pumpConnToPeer(m.Channel)
+		go d.pumpConnToPeer(m.Channel, true)
 	}
 }
 
@@ -205,7 +205,14 @@ func (d *Daemon) handleRelayClose(m proto.Msg) {
 }
 
 // pumpConnToPeer reads from a dialed conn and relays sealed frames back.
-func (d *Daemon) pumpConnToPeer(cid string) {
+// pumpConnToPeer reads from a dialed conn and relays sealed frames back.
+// teardown controls who owns channel teardown on EOF: the provider side
+// (reading the dialed service conn) owns it — when dockerd closes the
+// conn the channel is done. The consumer side (reading a local CLI conn)
+// must NOT tear down on EOF: the docker CLI half-closes its write side
+// after the request (exec without -i), and the response direction must
+// stay open until the provider closes it.
+func (d *Daemon) pumpConnToPeer(cid string, teardown bool) {
 	d.chMu.Lock()
 	c, ok := d.channels[cid]
 	d.chMu.Unlock()
@@ -222,14 +229,17 @@ func (d *Daemon) pumpConnToPeer(cid string) {
 		n, err := c.conn.Read(buf)
 		if n > 0 {
 			if serr := d.sendRelay(c.peer, pub, cid, "", "", buf[:n]); serr != nil {
-				break
+				d.closeChannel(cid, true)
+				return
 			}
 		}
 		if err != nil {
-			break
+			if teardown {
+				d.closeChannel(cid, true)
+			}
+			return
 		}
 	}
-	d.closeChannel(cid, true)
 }
 
 // openFrame decrypts and authenticates an inbound sealed frame.

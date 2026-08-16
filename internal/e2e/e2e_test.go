@@ -73,3 +73,32 @@ func TestPublicKeyEncoding(t *testing.T) {
 		t.Fatal("b64 roundtrip mismatch")
 	}
 }
+
+// TestLoadKeyRestart simulates a daemon restart: only the base64 strings
+// survive serialization, so LoadKey must rebuild usable pointers.
+func TestLoadKeyRestart(t *testing.T) {
+	alice, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "restart": bob's key is reloaded from its persisted b64 strings.
+	reloaded, err := LoadKey(bob.PubB64, bob.PrivB64)
+	if err != nil {
+		t.Fatalf("LoadKey: %v", err)
+	}
+	if reloaded.Public == nil || reloaded.Private == nil {
+		t.Fatal("LoadKey left derived pointers nil")
+	}
+	sealed, err := alice.Seal(reloaded.Public, []byte("after restart"))
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	msg, err := reloaded.Open(alice.Public, sealed)
+	if err != nil || string(msg) != "after restart" {
+		t.Fatalf("Open after restart failed: %v %q", err, msg)
+	}
+}

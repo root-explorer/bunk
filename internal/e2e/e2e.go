@@ -56,6 +56,26 @@ func DecodePublicB64(s string) (*[32]byte, error) {
 	return &k, nil
 }
 
+// LoadKey rebuilds a KeyPair (derived pointers included) from persisted
+// base64 strings. Public/Private are json:"-" so they are nil after
+// unmarshal; every load must go through here or sealing will panic.
+func LoadKey(pubB64, privB64 string) (*KeyPair, error) {
+	pub, err := DecodePublicB64(pubB64)
+	if err != nil {
+		return nil, err
+	}
+	privRaw, err := base64.StdEncoding.DecodeString(privB64)
+	if err != nil {
+		return nil, fmt.Errorf("decode privkey: %w", err)
+	}
+	if len(privRaw) != 32 {
+		return nil, errors.New("privkey must be 32 bytes")
+	}
+	var priv [32]byte
+	copy(priv[:], privRaw)
+	return &KeyPair{Public: pub, Private: &priv, PubB64: pubB64, PrivB64: privB64}, nil
+}
+
 // Seal encrypts and authenticates payload for recipientPub. The returned
 // slice is nonce || ciphertext.
 func (kp *KeyPair) Seal(recipientPub *[32]byte, payload []byte) ([]byte, error) {

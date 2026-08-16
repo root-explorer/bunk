@@ -65,6 +65,9 @@ export BUNK_HOME="$HOME/.bunk" BUNK_HUB="wss://hub.example.com/ws" BUNK_HUB_TOKE
 ./bunk start                                       # background daemon
 ./bunk pair --name brother-box                     # → prints a one-time code
 
+#    Windows host? Docker Desktop + WSL2 Ubuntu, then the one-line installer:
+#    https://github.com/root-explorer/bunk/blob/main/docs/windows-host.md
+
 # 4. on YOUR machine: same, then redeem the code
 export BUNK_HOME="$HOME/.bunk" BUNK_HUB="wss://hub.example.com/ws" BUNK_HUB_TOKEN="$TOKEN"
 ./bunk start

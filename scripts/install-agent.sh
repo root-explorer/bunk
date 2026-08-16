@@ -63,7 +63,8 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now bunk-agent
+systemctl enable bunk-agent
+systemctl restart bunk-agent
 
 # 5. Print the pairing code.
 sleep 2

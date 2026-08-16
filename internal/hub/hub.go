@@ -103,11 +103,24 @@ func (h *Hub) readLoop(c *client) {
 	}
 }
 
-// writer serializes outbound messages.
+// writer serializes outbound messages and keeps the connection alive
+// with periodic pings (read deadlines on both ends rely on them).
 func (h *Hub) writer(c *client) {
-	for m := range c.send {
-		if err := c.conn.WriteJSON(m); err != nil {
-			return
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case m, ok := <-c.send:
+			if !ok {
+				return
+			}
+			if err := c.conn.WriteJSON(m); err != nil {
+				return
+			}
+		case <-ticker.C:
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
+				return
+			}
 		}
 	}
 }

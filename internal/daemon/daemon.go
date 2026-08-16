@@ -339,8 +339,11 @@ func (d *Daemon) sendMsg(m proto.Msg) {
 	}
 }
 
-// hubWriter serializes outbound messages.
+// hubWriter serializes outbound messages and keeps the connection
+// alive with periodic pings (read deadlines on both ends rely on them).
 func (d *Daemon) hubWriter(conn *websocket.Conn) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-d.stop:
@@ -350,6 +353,10 @@ func (d *Daemon) hubWriter(conn *websocket.Conn) {
 				return
 			}
 			if err := conn.WriteJSON(m); err != nil {
+				return
+			}
+		case <-ticker.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 				return
 			}
 		}
